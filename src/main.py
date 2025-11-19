@@ -5,9 +5,11 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 import json
 import os
+from tkinter import simpledialog
 import pyaudio
 import wave
 import winsound
+from user import User
 from datetime import datetime
 from cryptography.fernet import Fernet
 from io import BytesIO
@@ -21,16 +23,38 @@ class DiaryApp(tk.Tk):
         super().__init__()
         self.title("Diary App")
         self.geometry("900x600")
-        self.key = None
-        self.fernet = None
-        self.is_recording = False
+        self.users: dict[str, User] = self.load_users() # Dictionary to store user data name: User object
+        self.current_user: User = None # Currently logged in user
+        self.key: bytes = None
+        self.fernet: Fernet = None
+        self.is_recording: bool = False
         self.stream: pyaudio.Stream = None
         self.frames: list[bytes] = []
         self.record_thread: threading.Thread = None
         self.time_encoding_started = None
         self.secure_diary = False
+        self._login = False
         self.start_widgets()
 
+    def load_users(self):
+        users = {}
+        if not os.path.exists('userdata'):
+            os.makedirs('userdata')
+        for filename in os.listdir('userdata'):
+            if filename.endswith('.txt'):
+                user = User.load(os.path.join('userdata', filename))
+                if user:
+                    users[user.name] = user
+        return users
+    
+    def create_user(self, name, password):
+        if name in self.users:
+            messagebox.showerror("Error", "User already exists.")
+            return None
+        user = User(name, password)
+        user.save()
+        self.users[name] = user
+        return user
 
     def save_key(self, key, filename='secret.key'):
         print("Saving Key...")
@@ -60,7 +84,6 @@ class DiaryApp(tk.Tk):
         current_hour = datetime.now().hour
         current_minutes = datetime.now().minute
         current_seconds = datetime.now().second
-        self.time_encoding_started = current_hour >= 18 or current_hour < 2
 
         print("Current Time: {}:{}:{}".format(current_hour, current_minutes, current_seconds))
 
@@ -68,29 +91,37 @@ class DiaryApp(tk.Tk):
         self.label.pack(pady=20)
         self.frame = tk.Frame(self)
         self.frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+        self.user_GUI()
         self.create_diary_buttons()
         self.create_audio_buttons()
-        if self.time_encoding_started:
-            self.label.config(text="Enter Password")
-            self.pass_entry = tk.Entry(self.frame, show="*")
-            self.pass_entry.pack(pady=10)
-            self.pass_button = tk.Button(self.frame, text="Submit", command=self.enter_diary_mode)
-            self.pass_button.pack(pady=10)
+        
+        # if self.time_encoding_started:
+        #     self.label.config(text="Enter Password")
+        #     self.pass_entry = tk.Entry(self.frame, show="*")
+        #     self.pass_entry.pack(pady=10)
+        #     self.pass_button = tk.Button(self.frame, text="Submit", command=self.enter_diary_mode)
+        #     self.pass_button.pack(pady=10)
 
         self.text_area = tk.Text(self, wrap=tk.WORD, font=("Helvetica", 12))
         self.text_area.pack(expand=True, fill="x", padx=10, pady=10)
 
-
-
-
+    def user_GUI(self):
+        self.user_GUI_frame = tk.Frame(self.frame)
+        self.user_GUI_frame.pack(side=tk.RIGHT, padx=10)
+        self.current_user_label = tk.Label(self.user_GUI_frame, text="Not logged in")
+        self.current_user_label.pack(side=tk.TOP, padx=10)
+        self.login_button = tk.Button(self.user_GUI_frame, text="Login", command=self.login)
+        self.login_button.pack(side=tk.RIGHT, padx=10)
+        self.register_button = tk.Button(self.user_GUI_frame, text="Register", command=self.register)
+        self.register_button.pack(side=tk.LEFT, padx=10)
 
     # Tempory way to access diary mode using a hardcoded password later use cryptography to secure it.
-    def enter_diary_mode(self):
-        if self.pass_entry.get() == "": # replace with secure password check
-            messagebox.showinfo("Access Granted", "Welcome to your Secure Diary!")
-            self.pass_entry.destroy()
-            self.pass_button.destroy()
-            self.secure_diary_activation()
+    # def enter_diary_mode(self):
+    #     if self.pass_entry.get() == "": # replace with secure password check
+    #         messagebox.showinfo("Access Granted", "Welcome to your Secure Diary!")
+    #         self.pass_entry.destroy()
+    #         self.pass_button.destroy()
+    #         self.secure_diary_activation()
 
 
     def secure_diary_activation(self):
@@ -119,6 +150,43 @@ class DiaryApp(tk.Tk):
         self.play_button = tk.Button(self.frame, text="Play Audio", command=self.play_audio)
         self.play_button.pack(side=tk.LEFT, padx=10, pady=10)
 
+    def login(self):
+        # login user
+        name = simpledialog.askstring("Login", "Enter your username:")
+        password = simpledialog.askstring("Login", "Enter your password:", show="*")
+        if not self._login:
+            if name in self.users and self.users[name].check_password(password):
+                self.current_user = self.users[name]
+                self.current_user_label.config(text=f"Logged in as: {self.current_user.get_name()}")
+                self._login = True
+                self.login_button.config(text="Logout", command=self.logout)
+                self.secure_diary_activation()
+                messagebox.showinfo("Login Successful", f"Welcome back, {self.current_user.get_name()}!")
+            else:
+                messagebox.showerror("Login Failed", "Invalid username or password.")
+        else:
+            self.logout()
+    
+    def logout(self):
+        self.current_user = None
+        self.current_user_label.config(text="Not logged in")
+        self._login = False
+        self.login_button.config(text="Login", command=self.login)
+        self.secure_diary = False
+        self.label.config(text="Welcome to a My Notepad App")
+        self.text_area.delete(1.0, tk.END)
+
+    def register(self):
+        # register new user
+        name = simpledialog.askstring("Register", "Enter a username:")
+        password = simpledialog.askstring("Register", "Enter a password:", show="*")
+        if name and password:
+            if self.create_user(name, password):
+                messagebox.showinfo("Registration Successful", f"User '{name}' created successfully!")
+            else:
+                messagebox.showerror("Registration Failed", "User already exists.")
+        else:
+            messagebox.showerror("Registration Failed", "Username and password cannot be empty.")
 
     def record_stop(self):
         # stop recording audio
@@ -131,55 +199,37 @@ class DiaryApp(tk.Tk):
         # Beep sound to indicate end of recording will replace with a sound file later
         winsound.Beep(500, 200)
         raw_data = b''.join(self.frames)
-        while not is_filepath:
-            if self.time_encoding_started:    
-                # select if recording is to be encrypted with a messagebox prompt
-                if messagebox.askyesno("Encrypt Audio", "Do you want to encrypt this audio recording?"):
-                    if not self.key:
-                        self.key = self.load_key()
-                        self.fernet = Fernet(self.key)
-                    
-                    # Create WAV in memory
-                    mem_file = BytesIO()
-                    with wave.open(mem_file, 'wb') as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(44100)
-                        wf.writeframes(raw_data)
-                    mem_file.seek(0)
-                    wav_bytes = mem_file.read()
-                    
-                    encrypted = self.fernet.encrypt(wav_bytes)
-                    enc_filepath = filedialog.asksaveasfilename(defaultextension=".enc",
-                                                                initialdir=os.getcwd(),
-                                                                title="Save Encrypted Audio Recording",
-                                                                filetypes=(("Encrypted Files", "*.enc"), ("All Files", "*.*")))
-                    if not enc_filepath.endswith('.enc'):
-                        messagebox.showerror("Invalid File", "Please select a valid .enc file.")
-                        continue
-                    if not enc_filepath:
-                        return
-                    with open(enc_filepath, 'wb') as ef:
-                        ef.write(encrypted)
-                    is_filepath = True
-                else:
-                    wave_filepath = filedialog.asksaveasfilename(defaultextension=".wav",
-                                                                initialdir=os.getcwd(),
-                                                                title="Save Audio Recording",
-                                                                filetypes=(("WAV Files", "*.wav"), ("All Files", "*.*")))
-                    if not wave_filepath.endswith('.wav'):
-                        messagebox.showerror("Invalid File", "Please select a valid WAV file.")
-                        continue
-                    if not wave_filepath:
-                        return
-                    with wave.open(wave_filepath, 'wb') as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(44100)
-                        wf.writeframes(raw_data)
-                    is_filepath = True
+        while not is_filepath:  
+            # select if recording is to be encrypted with a messagebox prompt
+            if messagebox.askyesno("Encrypt Audio", "Do you want to encrypt this audio recording?"):
+                if not self.key:
+                    self.key = self.load_key()
+                    self.fernet = Fernet(self.key)
+                
+                # Create WAV in memory
+                mem_file = BytesIO()
+                with wave.open(mem_file, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(44100)
+                    wf.writeframes(raw_data)
+                mem_file.seek(0)
+                wav_bytes = mem_file.read()
+                
+                encrypted = self.fernet.encrypt(wav_bytes)
+                enc_filepath = filedialog.asksaveasfilename(defaultextension=".enc",
+                                                            initialdir=os.getcwd(),
+                                                            title="Save Encrypted Audio Recording",
+                                                            filetypes=(("Encrypted Files", "*.enc"), ("All Files", "*.*")))
+                if not enc_filepath.endswith('.enc'):
+                    messagebox.showerror("Invalid File", "Please select a valid .enc file.")
+                    continue
+                if not enc_filepath:
+                    return
+                with open(enc_filepath, 'wb') as ef:
+                    ef.write(encrypted)
+                is_filepath = True
             else:
-                # Stop recording without encryption
                 wave_filepath = filedialog.asksaveasfilename(defaultextension=".wav",
                                                             initialdir=os.getcwd(),
                                                             title="Save Audio Recording",
@@ -195,6 +245,22 @@ class DiaryApp(tk.Tk):
                     wf.setframerate(44100)
                     wf.writeframes(raw_data)
                 is_filepath = True
+            # Stop recording without encryption
+            wave_filepath = filedialog.asksaveasfilename(defaultextension=".wav",
+                                                        initialdir=os.getcwd(),
+                                                        title="Save Audio Recording",
+                                                        filetypes=(("WAV Files", "*.wav"), ("All Files", "*.*")))
+            if not wave_filepath.endswith('.wav'):
+                messagebox.showerror("Invalid File", "Please select a valid WAV file.")
+                continue
+            if not wave_filepath:
+                return
+            with wave.open(wave_filepath, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(44100)
+                wf.writeframes(raw_data)
+            is_filepath = True
 
 
     def record_audio(self):
@@ -222,63 +288,62 @@ class DiaryApp(tk.Tk):
 
     def play_audio(self):
         # play audio from .wav or .enc file
-        if self.time_encoding_started:
-            filepath = filedialog.askopenfilename(initialdir=os.getcwd(),
-                                                title="Open Audio Recording",
-                                                filetypes=(("Encrypted Files", "*.enc"), ("WAV Files", "*.wav"), ("All Files", "*.*")))
-            if not filepath.endswith('.enc') and not filepath.endswith('.wav'):
-                messagebox.showerror("Invalid File", "Please select a valid .enc or .wav file.")
-                return
-            if not filepath:
-                return
-            if filepath.endswith('.enc'):
-                if not self.key:
-                    self.key = self.load_key()
-                    self.fernet = Fernet(self.key)
-                with open(filepath, 'rb') as ef:
-                    encrypted = ef.read()
-                data = self.fernet.decrypt(encrypted)
-                wf = wave.open(BytesIO(data), 'rb')
-            else:
-                wf = wave.open(filepath, 'rb')
-
-            p = pyaudio.PyAudio()
-            stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                            channels=wf.getnchannels(),
-                            rate=wf.getframerate(),
-                            output=True)
-            chunk = wf.readframes(1024)
-            while chunk:
-                stream.write(chunk)
-                chunk = wf.readframes(1024)
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            wf.close()
+        filepath = filedialog.askopenfilename(initialdir=os.getcwd(),
+                                            title="Open Audio Recording",
+                                            filetypes=(("Encrypted Files", "*.enc"), ("WAV Files", "*.wav"), ("All Files", "*.*")))
+        if not filepath.endswith('.enc') and not filepath.endswith('.wav'):
+            messagebox.showerror("Invalid File", "Please select a valid .enc or .wav file.")
+            return
+        if not filepath:
+            return
+        if filepath.endswith('.enc'):
+            if not self.key:
+                self.key = self.load_key()
+                self.fernet = Fernet(self.key)
+            with open(filepath, 'rb') as ef:
+                encrypted = ef.read()
+            data = self.fernet.decrypt(encrypted)
+            wf = wave.open(BytesIO(data), 'rb')
         else:
-            # Play the audio without decryption
-            filepath = filedialog.askopenfilename(initialdir=os.getcwd(),
-                                                title="Open Audio Recording",
-                                                filetypes=(("WAV Files", "*.wav"), ("All Files", "*.*")))
-            if not filepath.endswith('.wav'):
-                messagebox.showerror("Invalid File", "Please select a valid WAV file.")
-                return
-            if not filepath:
-                return
             wf = wave.open(filepath, 'rb')
-            p = pyaudio.PyAudio()
-            stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                            channels=wf.getnchannels(),
-                            rate=wf.getframerate(),
-                            output=True)
+
+        p = pyaudio.PyAudio()
+        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True)
+        chunk = wf.readframes(1024)
+        while chunk:
+            stream.write(chunk)
             chunk = wf.readframes(1024)
-            while chunk:
-                stream.write(chunk)
-                chunk = wf.readframes(1024) 
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            wf.close()
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+        wf.close()
+    
+        # Play the audio without decryption
+        filepath = filedialog.askopenfilename(initialdir=os.getcwd(),
+                                            title="Open Audio Recording",
+                                            filetypes=(("WAV Files", "*.wav"), ("All Files", "*.*")))
+        if not filepath.endswith('.wav'):
+            messagebox.showerror("Invalid File", "Please select a valid WAV file.")
+            return
+        if not filepath:
+            return
+        wf = wave.open(filepath, 'rb')
+        p = pyaudio.PyAudio()
+        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True)
+        chunk = wf.readframes(1024)
+        while chunk:
+            stream.write(chunk)
+            chunk = wf.readframes(1024) 
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+        wf.close()
 
     def _record_thread(self):
         print("Recording thread started.")
@@ -333,6 +398,7 @@ class DiaryApp(tk.Tk):
         self.key = Fernet.generate_key()
         self.fernet = Fernet(self.key)
         self.save_key(key=self.key)
+
 if __name__ == "__main__":
     app = DiaryApp()
     app.mainloop()
