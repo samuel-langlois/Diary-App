@@ -12,3 +12,4 @@
 /text_as_audio.wav
 userdata/
 __pycache__/
+*_example.py
